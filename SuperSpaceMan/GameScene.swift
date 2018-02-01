@@ -1,89 +1,271 @@
-//
-//  GameScene.swift
-//  SuperSpaceMan
-//
-//  Created by p14822 on 2018/1/24.
-//  Copyright © 2018年 p14822. All rights reserved.
-//
-
 import SpriteKit
-import GameplayKit
+import CoreMotion
 
 class GameScene: SKScene {
     
-    private var label : SKLabelNode?
-    private var spinnyNode : SKShapeNode?
+    let backgroundNode = SKSpriteNode(imageNamed: "Background")
+    let backgroundStarsNode = SKSpriteNode(imageNamed: "Stars")
+    let backgroundPlanetNode = SKSpriteNode(imageNamed: "PlanetStart")
+    let foregroundNode = SKSpriteNode()
+    var playerNode: SpaceMan!
+    var engineExhaust: SKEmitterNode?
+    var inBlackHole: SKEmitterNode?
     
-    override func didMove(to view: SKView) {
+    var impulseCount = 80
+    let coreMotionManager = CMMotionManager()
+    
+
+    var score = 0
+    let scoreTextNode = SKLabelNode(fontNamed: "Copperplate")
+    let impulseTextNode = SKLabelNode(fontNamed: "Copperplate")
+    let orbPopAction = SKAction.playSoundFileNamed("orb_pop.wav",waitForCompletion: false)
+    let startGameTextNode = SKLabelNode(fontNamed: "Copperplate")
+    let textureAtlas = SKTextureAtlas(named: "sprites.atlas")
+    required init?(coder aDecoder: NSCoder) {
         
-        // Get label node from scene and store it for use later
-        self.label = self.childNode(withName: "//helloLabel") as? SKLabelNode
-        if let label = self.label {
-            label.alpha = 0.0
-            label.run(SKAction.fadeIn(withDuration: 2.0))
-        }
+        super.init(coder: aDecoder)
+    }
+    
+    override init(size: CGSize) {
         
-        // Create shape node to use during mouse interaction
-        let w = (self.size.width + self.size.height) * 0.05
-        self.spinnyNode = SKShapeNode.init(rectOf: CGSize.init(width: w, height: w), cornerRadius: w * 0.3)
+        super.init(size: size)
         
-        if let spinnyNode = self.spinnyNode {
-            spinnyNode.lineWidth = 2.5
-            
-            spinnyNode.run(SKAction.repeatForever(SKAction.rotate(byAngle: CGFloat(Double.pi), duration: 1)))
-            spinnyNode.run(SKAction.sequence([SKAction.wait(forDuration: 0.5),
-                                              SKAction.fadeOut(withDuration: 0.5),
-                                              SKAction.removeFromParent()]))
+        physicsWorld.contactDelegate = self
+        
+        physicsWorld.gravity = CGVector(dx: 0.0, dy: -1.5);
+        
+        backgroundColor = SKColor(red: 0.0, green: 0.0, blue: 0.0, alpha: 1.0)
+        
+        isUserInteractionEnabled = true
+        
+        // adding the background
+        backgroundNode.size.width = frame.size.width
+        backgroundNode.anchorPoint = CGPoint(x: 0.5, y: 0.0)
+        backgroundNode.position = CGPoint(x: size.width / 2.0, y: 0.0)
+        
+        addChild(backgroundNode)
+        
+        backgroundStarsNode.size.width = frame.size.width
+        backgroundStarsNode.anchorPoint = CGPoint(x: 0.5, y: 0.0)
+        backgroundStarsNode.position = CGPoint(x: size.width / 2.0, y: 0.0)
+        addChild(backgroundStarsNode)
+        
+        backgroundPlanetNode.size.width = frame.size.width
+        backgroundPlanetNode.anchorPoint = CGPoint(x: 0.5, y: 0.0)
+        backgroundPlanetNode.position = CGPoint(x: size.width / 2.0, y: 0.0)
+        addChild(backgroundPlanetNode)
+        
+        addChild(foregroundNode)
+        
+        // add the player
+        playerNode = SpaceMan(textureAtlas: textureAtlas)
+        playerNode.position = CGPoint(x: size.width / 2.0, y: 220.0)
+        foregroundNode.addChild(playerNode)
+        
+        addBlackHolesToForeground()
+        addOrbsToForeground()
+        
+        let engineExhaustPath = Bundle.main.path(forResource: "EngineExhaust", ofType: "sks")
+        engineExhaust = NSKeyedUnarchiver.unarchiveObject(withFile: engineExhaustPath!) as? SKEmitterNode
+        engineExhaust?.position = CGPoint(x: 0.0, y: -(playerNode.size.height / 2))
+        
+        playerNode.addChild(engineExhaust!)
+        engineExhaust?.isHidden = true
+        
+        let inBlackHolePath = Bundle.main.path(forResource: "inBlackHole", ofType: "sks")
+        inBlackHole = NSKeyedUnarchiver.unarchiveObject(withFile: inBlackHolePath!) as? SKEmitterNode
+        inBlackHole?.position = CGPoint(x: 0.0, y: 0.0)
+        
+        playerNode.addChild(inBlackHole!)
+        inBlackHole?.isHidden = true
+        
+        scoreTextNode.text = "SCORE : \(score)"
+        scoreTextNode.fontSize = 20
+        scoreTextNode.fontColor = SKColor.white
+        scoreTextNode.position = CGPoint(x: size.width - 10, y: size.height - 20)
+        scoreTextNode.horizontalAlignmentMode = SKLabelHorizontalAlignmentMode.right
+        addChild(scoreTextNode)
+        
+        impulseTextNode.text = "IMPULSES : \(impulseCount)"
+        impulseTextNode.fontSize = 20
+        impulseTextNode.fontColor = SKColor.white
+        impulseTextNode.position = CGPoint(x: 10.0, y: size.height - 20)
+        impulseTextNode.horizontalAlignmentMode = SKLabelHorizontalAlignmentMode.left
+        addChild(impulseTextNode)
+        
+        startGameTextNode.text = "TAP ANYWHERE TO START!"
+        startGameTextNode.horizontalAlignmentMode = SKLabelHorizontalAlignmentMode.center
+        startGameTextNode.verticalAlignmentMode = SKLabelVerticalAlignmentMode.center
+        startGameTextNode.fontSize = 20
+        startGameTextNode.fontColor = SKColor.white
+        startGameTextNode.position = CGPoint(x: scene!.size.width / 2, y: scene!.size.height / 2)
+        addChild(startGameTextNode)
+    }
+    
+    func addOrbsToForeground() {
+        
+        let orbPlistPath = Bundle.main.path(forResource: "orbs", ofType: "plist")
+        let orbDataDictionary = NSDictionary(contentsOfFile: orbPlistPath!)
+        if let positionDictionary = orbDataDictionary {
+            let positions = positionDictionary.object(forKey: "positions") as! NSArray
+            for position in positions {
+                let orbNode = Orb(textureAtlas: SKTextureAtlas(named: "sprites.atlas"))
+                let x = (position as AnyObject).object(forKey: "x") as! CGFloat
+                let y = (position as AnyObject).object(forKey: "y") as! CGFloat
+                orbNode.position = CGPoint(x: x, y: y)
+                foregroundNode.addChild(orbNode)
+            }
         }
     }
     
-    
-    func touchDown(atPoint pos : CGPoint) {
-        if let n = self.spinnyNode?.copy() as! SKShapeNode? {
-            n.position = pos
-            n.strokeColor = SKColor.green
-            self.addChild(n)
-        }
-    }
-    
-    func touchMoved(toPoint pos : CGPoint) {
-        if let n = self.spinnyNode?.copy() as! SKShapeNode? {
-            n.position = pos
-            n.strokeColor = SKColor.blue
-            self.addChild(n)
-        }
-    }
-    
-    func touchUp(atPoint pos : CGPoint) {
-        if let n = self.spinnyNode?.copy() as! SKShapeNode? {
-            n.position = pos
-            n.strokeColor = SKColor.red
-            self.addChild(n)
+    func addBlackHolesToForeground() {
+        
+        let moveLeftAction = SKAction.moveTo(x: 0.0, duration: 2.0)
+        let moveRightAction = SKAction.moveTo(x: size.width, duration: 2.0)
+        let actionSequence = SKAction.sequence([moveLeftAction, moveRightAction])
+        let moveAction = SKAction.repeatForever(actionSequence)
+        let blackHolePlistPath = Bundle.main.path(forResource: "blackholes", ofType: "plist")
+        let blackHoleDataDictionary = NSDictionary(contentsOfFile: blackHolePlistPath!)
+        if let positionDictionary = blackHoleDataDictionary {
+            let positions = positionDictionary.object(forKey: "positions") as! NSArray
+            for position in positions {
+                let blackHoleNode = BlackHole(textureAtlas: SKTextureAtlas(named: "sprites.atlas"))
+                let x = (position as AnyObject).object(forKey: "x") as! CGFloat
+                let y = (position as AnyObject).object(forKey: "y")as! CGFloat
+                blackHoleNode.position = CGPoint(x: x, y: y)
+                blackHoleNode.run(moveAction)
+                foregroundNode.addChild(blackHoleNode)
+            }
         }
     }
     
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-        if let label = self.label {
-            label.run(SKAction.init(named: "Pulse")!, withKey: "fadeInOut")
+        
+        if !playerNode.physicsBody!.isDynamic {
+            
+            playerNode.physicsBody?.isDynamic = true
+            coreMotionManager.accelerometerUpdateInterval = 0.3
+            coreMotionManager.startAccelerometerUpdates()
+            startGameTextNode.removeFromParent()
         }
         
-        for t in touches { self.touchDown(atPoint: t.location(in: self)) }
+        if impulseCount > 0 {
+            playerNode.physicsBody?.applyImpulse(CGVector(dx: 0.0, dy: 40.0))
+            impulseCount -= 1
+            impulseTextNode.text = "IMPULSES : \(impulseCount)"
+            engineExhaust!.isHidden = false
+            Timer.scheduledTimer(timeInterval: 0.5, target: self,selector:#selector(GameScene.hideEngineExaust(_:)) , userInfo: nil, repeats: false)
+        }
     }
     
-    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
-        for t in touches { self.touchMoved(toPoint: t.location(in: self)) }
+    @objc func hideEngineExaust(_ timer:Timer!) {
+        
+        if !engineExhaust!.isHidden {
+            
+            engineExhaust!.isHidden = true
+        }
     }
-    
-    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
-        for t in touches { self.touchUp(atPoint: t.location(in: self)) }
-    }
-    
-    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
-        for t in touches { self.touchUp(atPoint: t.location(in: self)) }
-    }
-    
     
     override func update(_ currentTime: TimeInterval) {
-        // Called before each frame is rendered
+        
+        if playerNode.position.y >= 180.0 &&
+            playerNode.position.y < 6400.0 {
+            backgroundNode.position =
+                CGPoint(x: backgroundNode.position.x,
+                        y: -((playerNode.position.y - 180.0)/8))
+            backgroundStarsNode.position =
+                CGPoint(x: backgroundStarsNode.position.x,
+                        y: -((playerNode.position.y - 180.0)/6))
+            backgroundPlanetNode.position =
+                CGPoint(x: backgroundPlanetNode.position.x,
+                        y: -((playerNode.position.y - 180.0)/8))
+            foregroundNode.position =
+                CGPoint(x: foregroundNode.position.x,
+                        y: -(playerNode.position.y - 180.0))
+        }
+        else if playerNode.position.y > 7000.0 {
+            gameOverWithResult(true)
+        }
+        else if playerNode.position.y + playerNode.size.height < 0.0 {
+            gameOverWithResult(false)
+        }
+        removeOutOfSceneNodesWithName("BLACK_HOLE")
+        removeOutOfSceneNodesWithName("POWER_UP_ORB")
+    }
+    
+    override func didSimulatePhysics() {
+        
+        if let accelerometerData = coreMotionManager.accelerometerData {
+            
+            playerNode.physicsBody!.velocity =
+                CGVector(dx: CGFloat(accelerometerData.acceleration.x * 380.0),
+                         dy: playerNode.physicsBody!.velocity.dy)
+        }
+        
+        if playerNode.position.x < -(playerNode.size.width / 2) {
+            
+            playerNode.position = CGPoint(x: size.width - playerNode.size.width / 2, y: playerNode.position.y);
+        }
+        else if playerNode.position.x > size.width {
+            
+            playerNode.position = CGPoint(x: playerNode.size.width / 2, y: playerNode.position.y);
+        }
+    }
+    @objc func gameOverWithResult(_ gameResult: Bool) {
+        playerNode.removeFromParent()
+        let transition = SKTransition.crossFade(withDuration: 2.0)
+        let menuScene = MenuScene(size: size,
+                                  gameResult: gameResult,
+                                  score: score)
+        view?.presentScene(menuScene, transition: transition)
+    }
+    
+    func removeOutOfSceneNodesWithName(_ name: String) {
+        foregroundNode.enumerateChildNodes(withName: name, using: {
+            node, stop in
+            if self.playerNode.position.y - node.position.y > self.size.height {
+                node.removeFromParent()
+            }
+        })
+    }
+    
+    deinit {
+        
+        coreMotionManager.stopAccelerometerUpdates()
     }
 }
+
+extension GameScene: SKPhysicsContactDelegate {
+    
+    func didBegin(_ contact: SKPhysicsContact) {
+        
+        let nodeB = contact.bodyB.node!
+        
+        if nodeB.name == "POWER_UP_ORB"  {
+            
+            run(orbPopAction)
+            
+            impulseCount += 1
+            impulseTextNode.text = "IMPULSES : \(impulseCount)"
+            
+            score += 1
+            scoreTextNode.text = "SCORE : \(score)"
+            
+            nodeB.removeFromParent()
+        }
+        else if nodeB.name == "BLACK_HOLE"  {
+            
+            playerNode.physicsBody?.contactTestBitMask = 0
+            inBlackHole!.isHidden = false
+            impulseCount = 0
+            impulseTextNode.text = "IMPULSES : \(impulseCount)"
+            
+            let colorizeAction = SKAction.colorize(with: UIColor.red, colorBlendFactor: 1.0, duration: 1)
+            playerNode.run(colorizeAction)
+            
+            perform(#selector(gameOverWithResult), with: false, afterDelay:2)
+        }
+    }
+}
+
+
